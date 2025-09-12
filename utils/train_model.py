@@ -385,29 +385,40 @@ class Trainer(object):
         )
 
         # 为模型的训练进行准备
-        model, optimizer, scheduler, train_loader, test_loader = (
-            self.accelerator.prepare(
-                model, optimizer, scheduler, train_loader, test_loader
-            )
+        (
+            model,
+            optimizer,
+            scheduler,
+            train_loader,
+            test_loader,
+        ) = self.accelerator.prepare(
+            model, optimizer, scheduler, train_loader, test_loader
         )
 
         # 开始模型的训练
         for idx, epoch in enumerate(range(1, self.num_epochs + 1), 0):
             # 开始训练一个Epoch
-            train_loss[idx], train_acc[idx], model, optimizer, scheduler = (
-                self.finetune_one_epoch(
-                    epoch=epoch,
-                    model=model,
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    criterion=criterion,
-                    train_loader=train_loader,
-                )
+            (
+                train_loss[idx],
+                train_acc[idx],
+                model,
+                optimizer,
+                scheduler,
+            ) = self.finetune_one_epoch(
+                epoch=epoch,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                criterion=criterion,
+                train_loader=train_loader,
             )
             # 开始进行模型的测试
             if epoch >= self.test_epochs:
                 test_loss[idx], test_acc[idx] = self.evaluate(
-                    epoch=epoch, model=model, test_loader=test_loader, criterion=criterion
+                    epoch=epoch,
+                    model=model,
+                    test_loader=test_loader,
+                    criterion=criterion,
                 )
 
         # 结束模型的训练和验证，记录本次的训练信息

@@ -21,7 +21,6 @@ class TriangularCausalMask(object):
 
 
 class TimerMultivariateMask(object):
-
     def __init__(self, B, n_vars, n_tokens, device="cpu"):
         mask_shape = [B, 1, n_tokens, n_tokens]
         with torch.no_grad():
@@ -37,7 +36,6 @@ class TimerMultivariateMask(object):
 
 
 class TimerCovariateMask(object):
-
     def __init__(self, B, n_vars, n_tokens, device="cpu"):
         mask_shape = [B, 1, n_tokens, n_tokens]
         with torch.no_grad():

@@ -74,7 +74,6 @@ class ClipLoss(nn.Module):
     def get_logits(
         self, time_features: Tensor, graph_features: Tensor, logit_scale: Tensor
     ) -> Tuple[Tensor, Tensor]:
-
         all_time_features, all_graph_features = self.concat_all_gather(
             time_features=time_features, graph_features=graph_features
         )

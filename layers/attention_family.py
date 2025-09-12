@@ -10,12 +10,13 @@ import torch.nn as nn
 from math import sqrt
 
 from einops import repeat, rearrange
-from layers import QueryKeyProjection, RotaryProjection
+from layers import QueryKeyProjection, RotaryProjection, TimeFreqConcatenate
 from utils import TimerMultivariateMask, TimerCovariateMask
+
+from typing import Optional
 
 
 class AttentionBias(nn.Module, abc.ABC):
-
     def __init__(self, dim: int, num_heads: int):
         super().__init__()
         assert num_heads > 0 and dim % num_heads == 0
@@ -24,7 +25,8 @@ class AttentionBias(nn.Module, abc.ABC):
         self.head_dim = dim // num_heads
 
     @abc.abstractmethod
-    def forward(self, query_id, kv_id): ...
+    def forward(self, query_id, kv_id):
+        ...
 
 
 class BinaryAttentionBias(AttentionBias):
@@ -98,7 +100,9 @@ class TimeAttention(nn.Module):
         var_id = repeat(torch.arange(n_vars), "C -> (C n_tokens)", n_tokens=n_tokens)
         var_id = repeat(var_id, "L -> b h L", b=B, h=1).to(queries.device)
         # 由于添加了[CLS]这个特殊的token，因此变量这里也要额外添加一个
-        var_id = torch.concat([torch.ones(size=(B, 1, 1)).to(queries.device) * n_vars, var_id], dim=2)
+        var_id = torch.concat(
+            [torch.ones(size=(B, 1, 1)).to(queries.device) * n_vars, var_id], dim=2
+        )
 
         # var_id里面存放的是变量的编号，如果有输入通道是10，那么就表示有10个变量，然后对应的
         attn_bias = self.attn_bias(var_id, var_id)
@@ -190,3 +194,43 @@ class AttentionLayer(nn.Module):
         out = out.view(B, L, -1)
 
         return self.out_projection(out), attn
+
+
+class SEAttention(nn.Module):
+    """1dSE通道注意力机制"""
+
+    def __init__(self, channel: int, reduction: Optional[int] = 8) -> None:
+        super(SEAttention, self).__init__()
+        # 通过全局平均池化操作获取每个通道的重要性
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        # 根据全局池化的结果计算每个通道的重要性
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid(),
+        )
+
+    def init_weights(self):
+        # 初始化网络模块参数
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out")
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, std=0.001)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        # 获取数据的批量和通道数
+        bitch_size, channels, _ = x.size()
+        # 进行Squeeze挤压操作
+        y = self.avg_pool(x).view(bitch_size, channels)
+        # Excitation激励操作
+        y = self.fc(y).view(bitch_size, channels, 1)
+        return x * y.expand_as(x)
