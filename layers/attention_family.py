@@ -1,0 +1,192 @@
+# -*- coding: utf-8 -*-
+"""
+Created on 2024/12/17 20:40:15
+@author: Whenxuan Wang
+@email: wwhenxuan@gmail.com
+"""
+import abc
+import torch
+import torch.nn as nn
+from math import sqrt
+
+from einops import repeat, rearrange
+from layers import QueryKeyProjection, RotaryProjection
+from utils import TimerMultivariateMask, TimerCovariateMask
+
+
+class AttentionBias(nn.Module, abc.ABC):
+
+    def __init__(self, dim: int, num_heads: int):
+        super().__init__()
+        assert num_heads > 0 and dim % num_heads == 0
+
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+
+    @abc.abstractmethod
+    def forward(self, query_id, kv_id): ...
+
+
+class BinaryAttentionBias(AttentionBias):
+    """Moriai中使用的注意力机制的偏置"""
+
+    def __init__(self, dim: int, num_heads: int):
+        super().__init__(dim, num_heads)
+        self.emb = nn.Embedding(num_embeddings=2, embedding_dim=self.num_heads)
+
+    def forward(self, query_id, kv_id):
+        ind = torch.eq(query_id.unsqueeze(-1), kv_id.unsqueeze(-2))
+        weight = rearrange(self.emb.weight, "two num_heads -> two num_heads 1 1")
+        bias = ~ind * weight[:1] + ind * weight[1:]
+        return bias
+
+
+class TimeAttention(nn.Module):
+    """Moriai架构的注意力机制"""
+
+    def __init__(
+        self,
+        mask_flag=True,
+        scale=None,
+        attention_dropout=0.1,
+        output_attention=False,
+        d_model=512,
+        num_heads=8,
+        max_len=100,
+        covariate=False,
+        flash_attention=False,
+    ):
+        super(TimeAttention, self).__init__()
+        # 使注意力稳定的尺度因子
+        self.scale = scale
+        self.mask_flag = mask_flag
+        # 是否输出注意力机制
+        self.output_attention = output_attention
+        self.dropout = nn.Dropout(attention_dropout)
+        self.covariate = covariate
+        self.flash_attention = flash_attention
+        # 计算queries和keys进行点积的注意力分数矩阵
+        self.qk_proj = QueryKeyProjection(
+            dim=d_model,
+            num_heads=num_heads,
+            proj_layer=RotaryProjection,
+            kwargs=dict(max_len=max_len),
+            partial_factor=(0.0, 0.5),
+        )
+        self.attn_bias = BinaryAttentionBias(dim=d_model, num_heads=num_heads)
+
+    def forward(
+        self, queries, keys, values, attn_mask, n_vars, n_tokens, tau=None, delta=None
+    ):
+        B, L, H, E = queries.shape
+        _, S, _, D = values.shape
+
+        # [B, H, L, E]
+        queries = queries.permute(0, 2, 1, 3)
+        keys = keys.permute(0, 2, 1, 3)
+        if self.flash_attention:
+            values = values.permute(0, 2, 1, 3)
+
+        # 由于添加了[CLS]这个特殊的Token因此这里需要+1
+        seq_id = torch.arange(n_tokens * n_vars + 1)
+        seq_id = repeat(seq_id, "n -> b h n", b=B, h=H)
+
+        queries, keys = self.qk_proj(queries, keys, query_id=seq_id, kv_id=seq_id)
+
+        scale = self.scale or 1.0 / sqrt(E)
+
+        var_id = repeat(torch.arange(n_vars), "C -> (C n_tokens)", n_tokens=n_tokens)
+        var_id = repeat(var_id, "L -> b h L", b=B, h=1).to(queries.device)
+        # 由于添加了[CLS]这个特殊的token，因此变量这里也要额外添加一个
+        var_id = torch.concat([torch.ones(size=(B, 1, 1)).to(queries.device) * n_vars, var_id], dim=2)
+
+        # var_id里面存放的是变量的编号，如果有输入通道是10，那么就表示有10个变量，然后对应的
+        attn_bias = self.attn_bias(var_id, var_id)
+
+        if self.mask_flag:
+            if attn_mask is None:
+                # 没有时序掩码的时候
+                if self.covariate:
+                    attn_mask = TimerCovariateMask(
+                        B, n_vars, n_tokens, device=queries.device
+                    )
+                else:
+                    attn_mask = TimerMultivariateMask(
+                        B, n_vars, n_tokens, device=queries.device
+                    )
+            attn_mask = attn_bias.masked_fill(attn_mask.mask, float("-inf"))
+        else:
+            # 没有添加注意力掩码因此运行这一行代码
+            attn_mask = attn_bias
+
+        if self.flash_attention:
+            V = torch.nn.functional.scaled_dot_product_attention(
+                queries, keys, values, attn_mask
+            )
+        else:
+            scores = torch.einsum("bhle,bhse->bhls", queries, keys)
+            # 跳过[CLS]这个特殊的token
+            scores += attn_mask
+
+            A = self.dropout(torch.softmax(scale * scores, dim=-1))
+            V = torch.einsum("bhls,bshd->blhd", A, values)
+
+        if self.output_attention:
+            return V.contiguous(), None
+        else:
+            return V.contiguous(), None
+
+
+class AttentionLayer(nn.Module):
+    """Timer中使用的具体的注意力机制"""
+
+    def __init__(self, attention, d_model, n_heads, d_keys=None, d_values=None):
+        super(AttentionLayer, self).__init__()
+
+        d_keys = d_keys or (d_model // n_heads)
+        d_values = d_values or (d_model // n_heads)
+
+        # 模型中使用的具体注意力机制
+        self.inner_attention = attention
+        """将输入从模型的维度投影到具体的多头注意力机制中"""
+        self.query_projection = nn.Linear(d_model, d_keys * n_heads)
+        self.key_projection = nn.Linear(d_model, d_keys * n_heads)
+        self.value_projection = nn.Linear(d_model, d_values * n_heads)
+        """整合多头注意力机制的输出将其重新投影到模型维度中"""
+        self.out_projection = nn.Linear(d_values * n_heads, d_model)
+        self.n_heads = n_heads
+
+    def forward(
+        self,
+        queries,
+        keys,
+        values,
+        attn_mask,
+        n_vars=None,
+        n_tokens=None,
+        tau=None,
+        delta=None,
+    ):
+        B, L, _ = queries.shape
+        _, S, _ = keys.shape
+        H = self.n_heads
+
+        # 将对应的queries, keys, values 映射到对应的维度上
+        queries = self.query_projection(queries).view(B, L, H, -1)
+        keys = self.key_projection(keys).view(B, S, H, -1)
+        values = self.value_projection(values).view(B, S, H, -1)
+
+        # 在模型内部计算注意力机制
+        out, attn = self.inner_attention(
+            queries,
+            keys,
+            values,
+            attn_mask,
+            n_vars=n_vars,
+            n_tokens=n_tokens,
+            tau=tau,
+            delta=delta,
+        )
+        out = out.view(B, L, -1)
+
+        return self.out_projection(out), attn
