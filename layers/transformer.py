@@ -6,7 +6,9 @@ Created on 2024/12/17 20:40:15
 """
 import torch
 from torch import nn
-from layers import get_activation_fn
+from layers import get_activation, Normalization
+
+from typing import Optional, Tuple, List, Any
 
 
 class TimeEncoder(nn.Module):
@@ -49,7 +51,7 @@ class TimeEncoder(nn.Module):
         return x, attns
 
 
-class SignalLayer(nn.Module):
+class TimeLayer(nn.Module):
     """Moriai使用的一层注意力机制"""
 
     def __init__(
@@ -58,29 +60,46 @@ class SignalLayer(nn.Module):
         d_model: int,  # 模型的维度
         d_ff: int = None,  # 全连接/卷积网络的维度
         dropout: float = 0.1,  # dropout的比例
-        activation: str = "relu",
+        activation: str = "gelu",  # 使用的激活函数
+        norm: Optional[str] = "BatchNorm",
+        pre_norm: Optional[bool] = True,
         use_conv: bool = True,
-    ) -> None:  # 使用的激活函数
-        super(SignalLayer, self).__init__()
+    ) -> None:
+        super(TimeLayer, self).__init__()
+
         d_ff = d_ff or 4 * d_model
         self.attention = attention
+
         """Moriai中使用了两层point wise卷积"""
         self.use_conv = use_conv
+
+        # TODO: 这两个模块后续也要调整
         if use_conv is True:
             self.ff = nn.Sequential(
                 nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1),
-                get_activation_fn(activation),
+                get_activation(activation),
                 nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1),
             )
         else:
             self.ff = nn.Sequential(
                 nn.Linear(d_model, d_ff),
-                get_activation_fn(activation),
+                get_activation(activation),
                 nn.Linear(d_ff, d_model),
             )
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
+
+        # 创建使用的标准化层
+        self.norm = norm
+        self.norm1 = Normalization(num_features=d_model, norm=norm)
+        self.norm2 = Normalization(num_features=d_model, norm=norm)
+
+        # 设置标准化的具体位置
+        self.pre_norm = pre_norm
+
         self.dropout = nn.Dropout(dropout)
+
+    def forward_pre_norm(self, x, n_vars, n_tokens, attn_mask=None, tau=None, delta=None):
+        """"""
+
 
     def forward(self, x, n_vars, n_tokens, attn_mask=None, tau=None, delta=None):
         """一层注意力机制的四部分内容：多头注意力机制，标准化，全连接层，标准化"""

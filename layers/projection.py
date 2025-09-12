@@ -13,7 +13,21 @@ from torch import nn
 from typing import Optional, Union
 
 
-def get_activation_fn(activation: Union[nn.Module, str]):
+class Transpose(nn.Module):
+    """Transpose the dimensions of the input tensor"""
+
+    def __init__(self, *dims, contiguous=False) -> None:
+        super().__init__()
+        self.dims, self.contiguous = dims, contiguous
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.contiguous:
+            return x.transpose(*self.dims).contiguous()
+        else:
+            return x.transpose(*self.dims)
+
+
+def get_activation(activation: Union[nn.Module, str]):
     """选择使用的激活函数"""
     if callable(activation):
         return activation()
@@ -24,6 +38,45 @@ def get_activation_fn(activation: Union[nn.Module, str]):
     raise ValueError(
         f'{activation} is not available. You can use "relu", "gelu", or a callable'
     )
+
+
+class RMSNorm(torch.nn.Module):
+
+    def __init__(self, hidden_size, eps=1e-6):
+        super(RMSNorm, self).__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        input_dtype = x.dtype
+        x = x.to(torch.float32)
+        variance = x.pow(2).mean(-1, keepdim=True)
+        x = x * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * x.to(input_dtype)
+
+
+class Normalization(nn.Module):
+    """使用的标准化层"""
+
+    def __init__(self, num_features: int, norm: Union[nn.Module, str]):
+        super(Normalization, self).__init__()
+
+        self.num_features = num_features
+        self.norm_name = norm.lower()
+
+        if self.norm_name == "batchnorm":
+            self.normalization = nn.Sequential(
+                Transpose(1, 2), nn.BatchNorm1d(num_features), Transpose(1, 2)
+            )
+        elif self.norm_name == "layernorm":
+            self.normalization = nn.LayerNorm(num_features)
+        elif self.norm_name == "rmsnorm":
+            self.normalization = RMSNorm(hidden_size=num_features)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """标准化层的正向传播部分"""
+        return self.normalization(features)
+
 
 
 class Projection(nn.Module, abc.ABC):
@@ -133,3 +186,12 @@ class QueryKeyProjection(nn.Module):
             query = self.query_proj(query, seq_id=query_id)
             key = self.key_proj(key, seq_id=kv_id)
         return query, key
+
+
+if __name__ == '__main__':
+    x = torch.randn(size=(10, 64, 512))
+
+    for norm in ["BatchNorm", "LayerNorm", "RMSNorm"]:
+        layer = Normalization(num_features=512, norm=norm)
+        print(layer(x).size())
+
