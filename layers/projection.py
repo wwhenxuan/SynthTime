@@ -84,8 +84,7 @@ class Projection(nn.Module, abc.ABC):
         self.num_heads = num_heads
 
     @abc.abstractmethod
-    def forward(self, x, seq_id):
-        ...
+    def forward(self, x, seq_id): ...
 
 
 class RotaryProjection(Projection):
@@ -190,13 +189,13 @@ class QueryKeyProjection(nn.Module):
 class TimeFreqConcatenate(nn.Module):
     """用于整合与拼接来自时域的基本特征"""
 
-    def __init__(self, concat: Optional[str] = "alternate") -> None:
+    def __init__(self, concatenate: Optional[str] = "alternate") -> None:
         super(TimeFreqConcatenate, self).__init__()
 
         # 根据输入选择具体的拼接方式
-        if concat == "alternate":
+        if concatenate == "alternate":
             self.concat = self.alternate
-        elif concat == "sequential":
+        elif concatenate == "sequential":
             self.concat = self.sequential
         else:
             raise ValueError

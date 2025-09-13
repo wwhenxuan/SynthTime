@@ -10,7 +10,8 @@ import torch.nn as nn
 from math import sqrt
 
 from einops import repeat, rearrange
-from layers import QueryKeyProjection, RotaryProjection, TimeFreqConcatenate
+from layers import QueryKeyProjection, RotaryProjection
+from layers.projection import DepthWiseConv, Transpose
 from utils import TimerMultivariateMask, TimerCovariateMask
 
 from typing import Optional
@@ -25,8 +26,7 @@ class AttentionBias(nn.Module, abc.ABC):
         self.head_dim = dim // num_heads
 
     @abc.abstractmethod
-    def forward(self, query_id, kv_id):
-        ...
+    def forward(self, query_id, kv_id): ...
 
 
 class BinaryAttentionBias(AttentionBias):
@@ -43,7 +43,7 @@ class BinaryAttentionBias(AttentionBias):
         return bias
 
 
-class TimeAttention(nn.Module):
+class TemporalAttention(nn.Module):
     """Moriai架构的注意力机制"""
 
     def __init__(
@@ -58,7 +58,7 @@ class TimeAttention(nn.Module):
         covariate=False,
         flash_attention=False,
     ):
-        super(TimeAttention, self).__init__()
+        super(TemporalAttention, self).__init__()
         # 使注意力稳定的尺度因子
         self.scale = scale
         self.mask_flag = mask_flag
@@ -196,6 +196,148 @@ class AttentionLayer(nn.Module):
         return self.out_projection(out), attn
 
 
+class FrequencyFilter(nn.Module):
+    """频域滤波模块"""
+
+    def __init__(self, adaptive_filter: bool, dim: int) -> None:
+        super().__init__()
+        self.complex_weight_high = nn.Parameter(
+            torch.randn(dim, 2, dtype=torch.float32) * 0.02
+        )
+        self.complex_weight = nn.Parameter(
+            torch.randn(dim, 2, dtype=torch.float32) * 0.02
+        )
+
+        # 使用截断正态分布
+        nn.init.trunc_normal_(self.complex_weight_high, std=0.02)
+        nn.init.trunc_normal_(self.complex_weight, std=0.02)
+
+        self.threshold_param = nn.Parameter(torch.rand(1))  # * 0.5)
+
+        self.adaptive_filter = adaptive_filter
+
+    def create_adaptive_high_freq_mask(self, x_fft):
+        B, _, _ = x_fft.shape
+
+        # Calculate energy in the frequency domain
+        energy = torch.abs(x_fft).pow(2).sum(dim=-1)
+
+        # Flatten energy across H and W dimensions and then compute median
+        flat_energy = energy.view(B, -1)  # Flattening H and W into a single dimension
+        median_energy = flat_energy.median(dim=1, keepdim=True)[0]  # Compute median
+        median_energy = median_energy.view(
+            B, 1
+        )  # Reshape to match the original dimensions
+
+        # Normalize energy
+        normalized_energy = energy / (median_energy + 1e-6)
+
+        adaptive_mask = (
+            (normalized_energy > self.threshold_param).float() - self.threshold_param
+        ).detach() + self.threshold_param
+        adaptive_mask = adaptive_mask.unsqueeze(-1)
+
+        return adaptive_mask
+
+    def forward(self, x_in):
+        B, N, C = x_in.shape
+
+        dtype = x_in.dtype
+        x = x_in.to(torch.float32)
+
+        # Apply FFT along the time dimension
+        x_fft = torch.fft.rfft(x, dim=1, norm="ortho")
+        weight = torch.view_as_complex(self.complex_weight)
+        x_weighted = x_fft * weight
+
+        if self.adaptive_filter:
+            # Adaptive High Frequency Mask (no need for dimensional adjustments)
+            freq_mask = self.create_adaptive_high_freq_mask(x_fft)
+            x_masked = x_fft * freq_mask.to(x.device)
+
+            weight_high = torch.view_as_complex(self.complex_weight_high)
+            x_weighted2 = x_masked * weight_high
+
+            x_weighted += x_weighted2
+
+        # Apply Inverse FFT
+        x = torch.fft.irfft(x_weighted, n=N, dim=1, norm="ortho")
+
+        x = x.to(dtype)
+        x = x.view(B, N, C)  # Reshape back to original shape
+
+        return x
+
+
+class TimeFreqFusion(nn.Module):
+    """时域和频域的特征学习模块"""
+
+    def __init__(
+        self,
+        patch_num: int,
+        d_model: int,
+        d_ff: int,
+        kernel_size: int = 3,
+        padding: int = 1,
+        use_conv: Optional[int] = True,
+        bias: Optional[bool] = False,
+        reduction: Optional[int] = 8,
+        point_wise_bias: Optional[bool] = False,
+    ) -> None:
+        super(TimeFreqFusion, self).__init__()
+
+        self.patch_num = patch_num
+        self.token_num = patch_num * 2
+
+        if use_conv:
+            self.body = nn.Sequential(
+                Transpose(1, 2),
+                DepthWiseConv(
+                    in_channels=d_model,
+                    out_channels=d_ff,
+                    kernel_size=kernel_size,
+                    padding=padding,
+                    bias=bias,
+                ),
+                SEAttention(channel=d_ff, reduction=reduction),
+                DepthWiseConv(
+                    in_channels=d_ff,
+                    out_channels=d_model,
+                    kernel_size=kernel_size,
+                    padding=padding,
+                    bias=bias,
+                ),
+                Transpose(1, 2),
+            )
+        else:
+            self.body = nn.Sequential(
+                nn.Linear(in_features=d_model, out_features=d_ff, bias=bias),
+                SEAttention(channel=d_ff, reduction=reduction),
+                nn.Linear(in_features=d_ff, out_features=d_model, bias=bias),
+            )
+
+        self.conv1x1 = nn.Conv1d(
+            in_channels=self.token_num,
+            out_channels=self.patch_num,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+            bias=point_wise_bias,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """特征融合模块的正向传播部分"""
+        batch_size, token_num, d_model = x.size()
+
+        assert token_num == self.token_num
+
+        # 将时频混合的token输入到注意力卷积模块中进行特征学习
+        time_freq_maps = self.body(x)
+
+        # 通过1x1卷积对时频特征进行融合并输出
+        return self.conv1x1(time_freq_maps)
+
+
 class SEAttention(nn.Module):
     """1dSE通道注意力机制"""
 
@@ -203,6 +345,7 @@ class SEAttention(nn.Module):
         super(SEAttention, self).__init__()
         # 通过全局平均池化操作获取每个通道的重要性
         self.avg_pool = nn.AdaptiveAvgPool1d(1)
+
         # 根据全局池化的结果计算每个通道的重要性
         self.fc = nn.Sequential(
             nn.Linear(channel, channel // reduction, bias=False),
