@@ -37,3 +37,6 @@ class Model(nn.Module):
 
         # 构建使用的Transformer模块
         self.backbone = TransformerEncoder()
+
+    def __str__(self) -> str:
+        return "SynthTime"

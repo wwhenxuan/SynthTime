@@ -5,7 +5,6 @@ Created on 2024/12/17 20:40:15
 @email: wwhenxuan@gmail.com
 """
 import torch
-from networkx.generators.classic import path_graph
 from torch import nn
 
 from layers import get_activation
