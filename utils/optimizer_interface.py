@@ -16,7 +16,7 @@ from colorama import Fore, Style
 from typing import Optional, List
 
 
-class OptimInterface(object):
+class OptimizerInterface(object):
     """获得优化器的接口"""
 
     def __init__(self, args, accelerator) -> None:
@@ -159,6 +159,7 @@ class OptimInterface(object):
         self, optimizer: Optimizer, loader_len: int = None
     ) -> LRScheduler:
         """获得周期性循环动态学习率调整方法"""
+        # TODO: 如果loader_len这个参数没有的话应该怎么办 或是应该如何进行计算
         scheduler = lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=self.learning_rate,

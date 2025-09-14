@@ -11,7 +11,7 @@ from .masking import TimerMultivariateMask
 from .loss_fn import get_criterion
 
 # 获取优化器的接口文件
-from .optimizer_interface import OptimInterface
+from .optimizer_interface import OptimizerInterface
 
 # 获取模型训练的接口
 from .train_model import Trainer

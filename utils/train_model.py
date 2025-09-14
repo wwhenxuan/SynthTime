@@ -34,7 +34,7 @@ from tqdm import tqdm
 
 from utils.tools import makedir
 from utils.model_interface import ModelInterface
-from utils.optimizer_interface import OptimInterface
+from utils.optimizer_interface import OptimizerInterface
 from utils.data_interface import DataInterface
 from utils.loss_fn import get_criterion
 
@@ -46,7 +46,7 @@ class Trainer(object):
         self,
         args,
         model_interface: ModelInterface,
-        optimizer_interface: OptimInterface,
+        optimizer_interface: OptimizerInterface,
         data_interface: DataInterface,
         criterion_interface: nn.Module,
         accelerator: Accelerator,

@@ -34,34 +34,46 @@ from tqdm import tqdm
 
 from utils.tools import makedir
 from utils.model_interface import ModelInterface
-from utils.optimizer_interface import OptimInterface
+from utils.optimizer_interface import OptimizerInterface
 from utils.data_interface import DataInterface
 from utils.loss_fn import get_criterion
 
 from model import model_dict
 
-from typing import Optional
+from typing import Optional, List
 
 
 class Exp_Pretrain(object):
     """用于模型预训练的接口模块"""
 
     def __init__(self, configs, accelerator: Optional[Accelerator] = None):
-
         self.configs = configs
 
         # 这里创建accelerator对象并且需要传入对应的参数
         self.accelerator = accelerator if accelerator is not None else Accelerator()
+
+        # 在这里构建所需要的模型
+        self.model = self._built_model()
+
+        # 构建用于训练的数据
+
+        # 创建用于优化的通用接口
+        self.optim = OptimizerInterface(args=configs, accelerator=self.accelerator)
+
+        # 获取使用的优化器对象
+        self.optimizer = self._select_optimizer(trainable_params=[])
 
         # 获取当前训练设备
         self.device = self.accelerator.device
 
     def _built_model(self) -> nn.Module:
         """构建用于预训练的模型"""
-        return model_dict[self.configs.model_name]
+        self.accelerator.print("正在构建预训练的模型...")
+        return model_dict[self.configs.model_name](configs=self.configs)
 
-    def _select_optimizer(self) -> Optimizer:
+    def _select_optimizer(self, trainable_params: List[torch.Tensor]) -> Optimizer:
         """创建模型的优化器对象"""
+        return self.optim.load_optimizer(parameters=trainable_params)
 
     def _select_scheduler(self) -> LRScheduler:
         """创建模型的动态学习率调整模块"""
@@ -69,8 +81,15 @@ class Exp_Pretrain(object):
     def _get_data(self) -> DataLoader:
         """在这里需要搭建一个可以不断创建预训练数据的迭代器"""
 
+    def _get_trainable_params(self) -> List[torch.Tensor]:
+        """获取能够进行训练的参数"""
+
     def prepare(self) -> None:
         """对训练所需要的各种对象进行封装"""
+
+    def prepare_data_loader(self, data_loader: DataLoader) -> DataLoader:
+        """对训练所需要的数据进行封装"""
+        return self.accelerator.prepare_data_loader(data_loader=data_loader)
 
     def logging(self) -> None:
         """创建并等级本次预训练过程中所产生的信息"""
@@ -85,13 +104,13 @@ class Trainer(object):
     """模型训练的通用接口"""
 
     def __init__(
-            self,
-            args,
-            model_interface: ModelInterface,
-            optimizer_interface: OptimInterface,
-            data_interface: DataInterface,
-            criterion_interface: nn.Module,
-            accelerator: Accelerator,
+        self,
+        args,
+        model_interface: ModelInterface,
+        optimizer_interface: OptimizerInterface,
+        data_interface: DataInterface,
+        criterion_interface: nn.Module,
+        accelerator: Accelerator,
     ) -> None:
         self.args = args
 
@@ -271,12 +290,12 @@ class Trainer(object):
             self.plot_pretrain(train_loss=train_loss)
 
     def pretrain_one_epoch(
-            self,
-            epoch: int,
-            model: nn.Module,
-            optimizer: torch.optim.Optimizer,
-            scheduler: torch.optim.lr_scheduler.LRScheduler,
-            criterion: nn.Module,
+        self,
+        epoch: int,
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
+        criterion: nn.Module,
     ) -> Tuple[
         float, nn.Module, torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler
     ]:
@@ -290,7 +309,7 @@ class Trainer(object):
             self.accelerator.print(
                 Fore.RED + "Now is loading pretraining data" + Style.RESET_ALL,
                 end=" -> ",
-                )
+            )
 
             # 获取最新的数据集
             train_loader = self.data_interface.get_pretraining_dataloader()
@@ -332,12 +351,12 @@ class Trainer(object):
                 loss_value += loss.item()
 
                 data_loader.desc = (
-                        "["
-                        + Fore.GREEN
-                        + f"Epoch {epoch}"
-                        + Style.RESET_ALL
-                        + "] "
-                        + f"Loss={loss_value.item() / num_samples:.5f}"
+                    "["
+                    + Fore.GREEN
+                    + f"Epoch {epoch}"
+                    + Style.RESET_ALL
+                    + "] "
+                    + f"Loss={loss_value.item() / num_samples:.5f}"
                 )
                 # 动态调整学习率
                 scheduler.step()
@@ -356,11 +375,11 @@ class Trainer(object):
         # 获取最后一行
         max_row = sheet.max_row + 1
         for col, info in enumerate(
-                [
-                    epoch,
-                    str(datetime.now()),
-                    loss,
-                ]
+            [
+                epoch,
+                str(datetime.now()),
+                loss,
+            ]
         ):
             # 记录本次微调的所有结果并改变样式
             sheet.cell(row=max_row, column=col).value = info
@@ -378,7 +397,7 @@ class Trainer(object):
                 + "Now is saving the pre-trained model parameters"
                 + Style.RESET_ALL,
                 end=" -> ",
-                )
+            )
             save_name = f"{epoch}.pth"
             torch.save(model.state_dict(), path.join(self.params_path, save_name))
             self.accelerator.print(Fore.GREEN + "successfully saved!" + Style.RESET_ALL)
@@ -470,13 +489,13 @@ class Trainer(object):
         self.logging_finetuning(accuracy=accuracy, loss=loss)
 
     def finetune_one_epoch(
-            self,
-            epoch: int,
-            model: nn.Module,
-            optimizer: torch.optim.Optimizer,
-            scheduler: torch.optim.lr_scheduler.LRScheduler,
-            criterion: Callable,
-            train_loader: DataLoader,
+        self,
+        epoch: int,
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
+        criterion: Callable,
+        train_loader: DataLoader,
     ) -> Tuple[
         float,
         float,
@@ -535,11 +554,11 @@ class Trainer(object):
 
     @torch.no_grad()
     def evaluate(
-            self,
-            epoch: int,
-            model: nn.Module,
-            criterion: Callable,
-            test_loader: DataLoader,
+        self,
+        epoch: int,
+        model: nn.Module,
+        criterion: Callable,
+        test_loader: DataLoader,
     ) -> Tuple[float, float]:
         """在模型的微调时通过测试集进行评估"""
         model.eval()
@@ -570,10 +589,10 @@ class Trainer(object):
 
                 # 打印本次训练的情况
                 data_loader.desc = (
-                        f"[\033[31mTest  Epoch\033[0m {epoch}] loss: {round(accu_loss.item() / step, 4)}, "
-                        + Fore.GREEN
-                        + f"acc: {round(accu_num.item() / num_samples, 4)}"
-                        + Style.RESET_ALL
+                    f"[\033[31mTest  Epoch\033[0m {epoch}] loss: {round(accu_loss.item() / step, 4)}, "
+                    + Fore.GREEN
+                    + f"acc: {round(accu_num.item() / num_samples, 4)}"
+                    + Style.RESET_ALL
                 )
                 # 检查损失是否正常
                 check_loss(loss=loss, train_type="finetuning")
@@ -588,18 +607,18 @@ class Trainer(object):
         # 获取最后一行
         max_row = sheet.max_row + 1
         for col, info in enumerate(
-                [
-                    str(datetime.now()),
-                    self.args.model,
-                    accuracy,
-                    loss,
-                    self.num_epochs,
-                    self.args.dataset,
-                    self.args.dataset_index,
-                    self.args.graph_generate,
-                    self.args.learning_rate,
-                    self.args.batch_size,
-                ]
+            [
+                str(datetime.now()),
+                self.args.model,
+                accuracy,
+                loss,
+                self.num_epochs,
+                self.args.dataset,
+                self.args.dataset_index,
+                self.args.graph_generate,
+                self.args.learning_rate,
+                self.args.batch_size,
+            ]
         ):
             # 记录本次微调的所有结果并改变样式
             sheet.cell(row=max_row, column=col).value = info
@@ -613,14 +632,14 @@ class PreTrainer(object):
     """用于模型预训练的接口"""
 
     def __init__(
-            self,
-            args,
-            model: nn.Module,
-            optimizer: Optimizer,
-            criterion: Callable,
-            scheduler: LRScheduler,
-            accelerator: Accelerator,
-            data_interface: DataInterface,
+        self,
+        args,
+        model: nn.Module,
+        optimizer: Optimizer,
+        criterion: Callable,
+        scheduler: LRScheduler,
+        accelerator: Accelerator,
+        data_interface: DataInterface,
     ):
         self.args = args
         # 获取训练轮数
@@ -729,7 +748,7 @@ class PreTrainer(object):
                 self.accelerator.print(
                     Fore.RED + "Now is loading pretraining data" + Style.RESET_ALL,
                     end=" -> ",
-                    )
+                )
                 train_loader = self.data_interface.get_dataloader()
                 train_loader = self.accelerator.prepare_data_loader(
                     train_loader, device_placement=True
@@ -741,7 +760,7 @@ class PreTrainer(object):
                 self.model.train()
                 data_loader = tqdm(train_loader, file=sys.stdout)
                 for step, (time, time_mask, sym_ids, sym_mask) in enumerate(
-                        data_loader, 1
+                    data_loader, 1
                 ):
                     self.optimizer.zero_grad()
                     num_samples += time.shape[0]
@@ -764,17 +783,17 @@ class PreTrainer(object):
                     train_loss_t2s[idx] += loss_t2s.item()
                     train_loss_s2t[idx] += loss_s2t.item()
                     data_loader.desc = (
-                            "["
-                            + Fore.GREEN
-                            + f"Epoch {epoch}"
-                            + Style.RESET_ALL
-                            + "] "
-                            + "Loss="
-                            + Fore.GREEN
-                            + f"{round(train_loss[idx].item() / num_samples, 6)}"
-                            + Style.RESET_ALL
-                            + f" loss_mtm: {round(train_loss_mtm[idx].item() / num_samples, 6)}, loss_mlm: {round(train_loss_mlm[idx].item() / num_samples, 6)}, "
-                              f"loss_t2s: {round(train_loss_t2s[idx].item() / num_samples, 6)}, loss_s2t: {round(train_loss_s2t[idx].item() / num_samples, 6)}"
+                        "["
+                        + Fore.GREEN
+                        + f"Epoch {epoch}"
+                        + Style.RESET_ALL
+                        + "] "
+                        + "Loss="
+                        + Fore.GREEN
+                        + f"{round(train_loss[idx].item() / num_samples, 6)}"
+                        + Style.RESET_ALL
+                        + f" loss_mtm: {round(train_loss_mtm[idx].item() / num_samples, 6)}, loss_mlm: {round(train_loss_mlm[idx].item() / num_samples, 6)}, "
+                        f"loss_t2s: {round(train_loss_t2s[idx].item() / num_samples, 6)}, loss_s2t: {round(train_loss_s2t[idx].item() / num_samples, 6)}"
                     )
                     # 动态调整学习率
                     self.scheduler.step()
@@ -842,7 +861,7 @@ class PreTrainer(object):
             self.accelerator.print(
                 Fore.RED + "Now is saving the pretrained params" + Style.RESET_ALL,
                 end=" -> ",
-                )
+            )
             save_name = f"{epoch}_{round(loss.item(), 4)}.pth"
             torch.save(
                 self.model.time_encoder.state_dict(),
