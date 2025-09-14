@@ -12,7 +12,6 @@ from layers import TransformerLayer, TransformerEncoder, ResidualEmbedding
 
 
 class Model(nn.Module):
-
     def __init__(self, configs) -> None:
         super(Model, self).__init__()
 

@@ -23,9 +23,7 @@ class TransformerEncoder(nn.Module):
 
     def __init__(
         self,
-        time_attention: Union[
-            nn.Module, TemporalAttention
-        ],  # 时域中使用的具体注意力机制
+        time_attention: Union[nn.Module, TemporalAttention],  # 时域中使用的具体注意力机制
         frequency_filter: Union[nn.Module, FrequencyFilter],  # 频域中使用的滤波器模块
         feature_fusion: Union[nn.Module, TimeFreqFusion],  # 时频特征融合模块
         d_model: int,  # 模型的维度
@@ -80,9 +78,7 @@ class TransformerLayer(nn.Module):
     def __init__(
         self,
         # TODO: 在时域中使用注意力机制，在频域中使用自适应滤波器
-        time_attention: Union[
-            nn.Module, TemporalAttention
-        ],  # 时域中使用的具体注意力机制
+        time_attention: Union[nn.Module, TemporalAttention],  # 时域中使用的具体注意力机制
         frequency_filter: Union[nn.Module, FrequencyFilter],  # 频域中使用的滤波器模块
         feature_fusion: Union[nn.Module, TimeFreqFusion],  # 时频特征融合模块
         d_model: int,  # 模型的维度

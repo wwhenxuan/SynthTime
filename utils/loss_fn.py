@@ -5,12 +5,14 @@ Created on 2024/9/23 17:00
 @email: wwhenxuan@gmail.com
 获取使用的损失函数的接口模块
 """
-from typing import Tuple, Dict, Callable
+from typing import Optional, Union, Tuple, Dict, Callable
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
+
+from torch import fft
 
 from accelerate import Accelerator
 
@@ -120,3 +122,88 @@ class ClipLoss(nn.Module):
         ) / 2
 
         return {"contrastive_loss": total_loss} if output_dict else total_loss
+
+
+class MaskedFilterLoss(nn.Module):
+    """
+    本文提出的全新的预训练损失，
+    原本的时间序列掩码是将被掩码的时间序列全部设置为0，
+    该方法在一定程度上破环了时间序列数据的连续性和时序相依关系。
+
+    因此本文通过构造随机的（待定）维纳滤波器对被掩码部分的时间序列进行频率滤波，
+    并使模型来恢复和重构被滤波的部分，而非从0开始重构。
+    这种方式能够使模型根据相邻的时间序列Patch的周期与趋势特征，
+    来恢复被过滤掉的周期组分，
+    因此该方法不会破坏时间序列数据的连续性和时序相依关系。
+
+    TODO: 分析这个损失在学习上是否存在难度
+    """
+
+    def __init__(
+        self,
+        accelerator: Accelerator,
+        weight: Optional[float] = 0.5,
+        return_loss_dict: Optional[bool] = True,
+    ) -> None:
+        super(MaskedFilterLoss, self).__init__()
+
+        self.accelerator = accelerator
+        self.device = self.accelerator.device
+
+        # 用于分配时序和频域重构损失的权重
+        self.weight = weight
+
+        # 是否要以字典的形式返回所有的损失
+        self.return_loss_dict = return_loss_dict
+
+    def __str__(self) -> str:
+        return "MaskedFilterLoss"
+
+    @staticmethod
+    def reconstruct_loss(
+        self,
+        logist: torch.Tensor,
+        labels: torch.Tensor,
+        attn_mask: torch.Tensor,
+        p: Optional[Union[int, float]] = 2,
+    ) -> torch.Tensor:
+        """计算重构的损失"""
+        masked_loss = (logist - labels) ** p
+        masked_loss = masked_loss.mean(dim=-1)
+
+        # Only make losses in the masked areas
+        return (masked_loss * (~attn_mask).int()).sum() / (~attn_mask).sum()
+
+    def forward(
+        self,
+        time_patch: torch.Tensor,
+        time_reconstruct: torch.Tensor,
+        freq_patch: torch.Tensor,
+        freq_reconstruct: torch.Tensor,
+        attn_mask: torch.Tensor,
+    ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
+        """通过正向传播计算这部分损失的具体数值"""
+        # TODO: 这个损失可以同时在时域和频域中进行引入
+
+        # 对时序的重构部分进行傅里叶变换得到频域中的重构部分
+        # # TODO: 这里进行傅里叶变换的时候可能需要选择维度
+        # freq_reconstruct = fft.fft(time_reconstruct)
+
+        # 计算时域损失
+        time_loss = self.reconstruct_loss(
+            logist=time_patch, labels=time_reconstruct, attn_mask=attn_mask
+        )
+
+        # 计算频域损失
+        freq_loss = self.reconstruct_loss(
+            logist=freq_patch, labels=freq_reconstruct, attn_mask=attn_mask
+        )
+
+        # 根据权重计算最后的损失
+        loss = self.weight * time_loss + (1 - self.weight) * freq_loss
+
+        # 返回最后的损失信息
+        if self.return_loss_dict:
+            return {"time": time_loss, "freq": freq_loss, "sum": loss}
+        else:
+            return loss
