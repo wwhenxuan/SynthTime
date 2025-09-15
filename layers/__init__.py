@@ -22,4 +22,4 @@ from .block_family import FrequencyFilter
 from .block_family import TimeFreqFusion
 from .block_family import SEAttention
 
-from .embedding import ResidualEmbedding
+from .embedding import ResidualEmbedding, FlattenHeads

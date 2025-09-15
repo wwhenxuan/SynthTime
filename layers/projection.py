@@ -84,8 +84,7 @@ class Projection(nn.Module, abc.ABC):
         self.num_heads = num_heads
 
     @abc.abstractmethod
-    def forward(self, x, seq_id):
-        ...
+    def forward(self, x, seq_id): ...
 
 
 class RotaryProjection(Projection):

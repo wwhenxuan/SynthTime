@@ -8,7 +8,15 @@ Created on 2025/09/12 10:21:23
 import torch
 from torch import nn
 
-from layers import TransformerLayer, TransformerEncoder, ResidualEmbedding
+from layers import (
+    TransformerLayer,
+    TransformerEncoder,
+    ResidualEmbedding,
+    FlattenHeads,
+    TemporalAttention,
+    FrequencyFilter,
+    TimeFreqFusion,
+)
 
 
 class Model(nn.Module):
@@ -40,13 +48,63 @@ class Model(nn.Module):
 
         # 构建用于嵌入的线性层
         self.embedding = ResidualEmbedding(
-            patch_len=self.patch_len,
+            patch_len=configs.patch_len,
             d_model=configs.d_model,
             hidden_features=configs.embed_hidden,
         )
 
         # 构建使用的Transformer模块
-        self.backbone = TransformerEncoder()
+        self.backbone = TransformerEncoder(
+            transformer_layer=TransformerLayer(
+                time_attention=TemporalAttention(d_model=configs.d_model,
+                                                 n_heads=configs.n_heads,
+                                                 attention_dropout=configs.attention_dropout,
+                                                 max_len=configs.max_len,
+                                                 scale=None, ),
+                frequency_filter=FrequencyFilter(
+                    adaptive_filter=configs.adaptive_filter,
+                    d_model=configs.d_model,
+                    norm=configs.rfft_norm,
+                ),
+                feature_fusion=TimeFreqFusion(
+                    patch_num=configs.patch_num,
+                    d_model=configs.d_model,
+                    d_ff=configs.d_ff,
+                    kernel_size=configs.kernel_size,
+                    padding=configs.padding,
+                    use_conv=configs.use_conv,
+                    bias=configs.fusion_bias,
+                    reduction=configs.reduction,
+                    point_wise_bias=configs.point_wise_bias,
+                ),
+                d_model=configs.d_model,
+                concatenate=configs.concatenate,
+                dropout=configs.dropout,
+                norm=configs.norm,
+                pre_norm=configs.pre_norm,
+            ),
+            d_model=configs.d_model,
+            n_layers=configs.n_layers,
+            backbone_norm=configs.backbone_norm,  # TODO: 这两个是用于增强模型的性能的
+            talking_heads=configs.talking_heads,
+        )
 
-    def __str__(self) -> str:
-        return "SynthTime"
+        # TODO: 这里添加任务头
+        self.task_layer = ...
+
+    def patching(self, x: torch.Tensor) -> torch.Tensor:
+        """将输入的多通道信号划分为不同的片段"""
+        # x = x.permute(0, 2, 1)  # [batch_size, num_channels, seq_len]
+        x = x.unfold(
+            dimension=-1, size=self.patch_len, step=self.stride,
+        )  # [batch_size, num_channels, num_vars, patch_len]
+        return x
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pass
+
+    def pretrain(self, x: torch.Tensor) -> torch.Tensor:
+        """用于模型预训练的接口配置"""
+
+    def long_term_forecast(self, x: torch.Tensor) -> torch.Tensor:
+        pass
