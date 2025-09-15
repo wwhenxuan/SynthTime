@@ -317,9 +317,18 @@ if __name__ == "__main__":
         type=int,
         help="The accumulation steps number of gradient",
     )
-    # parser.add_argument(
-    #     ""
-    # )
+    parser.add_argument(
+        "--data_length",
+        default=None,
+        type=int,
+        help="The pre-training data size for the scheduler",
+    )
+    parser.add_argument(
+        "--per_number",
+        type=int,
+        default=2,
+        help="Number of data read per epoch in pre-training",
+    )
 
     args = parser.parse_args()
 
