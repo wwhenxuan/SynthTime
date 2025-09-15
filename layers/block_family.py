@@ -45,7 +45,6 @@ class BinaryAttentionBias(AttentionBias):
 
 
 class TemporalAttention(nn.Module):
-
     def __init__(
         self,
         mask_flag=True,
@@ -53,7 +52,7 @@ class TemporalAttention(nn.Module):
         attention_dropout=0.1,
         output_attention=False,
         d_model=512,
-        n_heads: int=8,
+        n_heads: int = 8,
         max_len=100,  # 最大长度又影响什么
         covariate=False,  # 这个变量的具体作用是什么
         flash_attention=False,  # 什么是Flash Attention

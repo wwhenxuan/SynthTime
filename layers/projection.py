@@ -84,7 +84,8 @@ class Projection(nn.Module, abc.ABC):
         self.num_heads = num_heads
 
     @abc.abstractmethod
-    def forward(self, x, seq_id): ...
+    def forward(self, x, seq_id):
+        ...
 
 
 class RotaryProjection(Projection):
@@ -312,7 +313,9 @@ class Flatten_Heads(nn.Module):
             self.dropout = nn.Dropout(head_dropout)
             self.flatten = nn.Flatten(start_dim=-2)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:  # [batch_size, n_vars, d_model, patch_num]
+    def forward(
+        self, x: torch.Tensor
+    ) -> torch.Tensor:  # [batch_size, n_vars, d_model, patch_num]
         if self.individual is True:
             x_out = []
             for i in range(self.n_vars):
@@ -330,20 +333,22 @@ class Flatten_Heads(nn.Module):
 
 
 class TaskHeads(nn.Module):
-    def __init__(self, task_name: str, individual: bool,
+    def __init__(
+        self,
+        task_name: str,
+        individual: bool,
         n_vars: int,
         nf: int,
-                 n_classes: int,
+        n_classes: int,
         patch_num: int,
         targets_window: int,
         head_dropout: int = 0,
         cls_token: Optional[bool] = False,
-                 ) -> None:
+    ) -> None:
         super(TaskHeads, self).__init__()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         pass
-
 
 
 # if __name__ == '__main__':

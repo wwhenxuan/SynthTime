@@ -50,14 +50,14 @@ class FlattenHeads(nn.Module):
     """Integrate the final output of the time series encoder"""
 
     def __init__(
-            self,
-            individual: bool,
-            n_vars: int,
-            nf: int,
-            patch_num: int,
-            targets_window: int,
-            head_dropout: float = 0,
-            cls_token: Optional[bool] = False,
+        self,
+        individual: bool,
+        n_vars: int,
+        nf: int,
+        patch_num: int,
+        targets_window: int,
+        head_dropout: float = 0,
+        cls_token: Optional[bool] = False,
     ) -> None:
         super().__init__()
         # Whether to output in a channel-independent manner
@@ -97,72 +97,23 @@ class FlattenHeads(nn.Module):
             x = self.linear(x)
             x = self.dropout(x)
         return x
-    
-    
+
+
 class TaskHeads(nn.Module):
     """用于多种不同下游任务的任务头网络"""
-    
-    def __init__(self, configs, patch_num: int, dropout: Optional[float] = 0.1) -> None:
-        super().__init__()
 
+    def __init__(
+        self,
+        configs,
+        task_name: str,
+        d_model: int,
+        patch_num: int,
+        dropout: Optional[float] = 0.1,
+    ) -> None:
+        super(TaskHeads, self).__init__()
+
+        self.task_name = task_name
+
+        self.d_model = d_model
         self.patch_num = patch_num
         self.dropout = dropout
-
-        if (
-                self.task_name == "long_term_forecast"
-                or self.task_name == "short_term_forecast"
-        ):
-            self.flatten_head = FlattenHeads(
-                individual=self.individual,
-                n_vars=configs.enc_in,
-                patch_num=self.patch_num,
-                nf=self.d_model,
-                targets_window=configs.pred_len,
-                head_dropout=self.dropout,
-                cls_token=False,
-            )
-        elif self.task_name == "classification":
-            if configs.conv1d is True:
-                self.conv1d = nn.Conv1d(
-                    in_channels=configs.enc_in,
-                    out_channels=configs.out_channels,
-                    kernel_size=(3,),
-                    stride=(1,),
-                    padding=1,
-                )
-                configs.enc_in = configs.out_channels
-                self.use_conv1d = True
-            else:
-                self.use_conv1d = False
-            self.act = nn.GELU()
-            self.ln_proj = nn.LayerNorm(
-                self.d_model * (self.patch_num * configs.enc_in + 1)
-            )
-            self.classifier = nn.Linear(
-                in_features=self.d_model * (self.patch_num * configs.enc_in + 1),
-                out_features=configs.num_classes,
-            )
-
-        elif self.task_name == "imputation":
-            self.flatten_head = FlattenHeads(
-                individual=self.individual,
-                n_vars=configs.enc_in,
-                patch_num=self.patch_num,
-                nf=self.d_model,
-                targets_window=self.seq_len,
-                head_dropout=self.out_dropout,
-                cls_token=False,
-            )
-
-        elif self.task_name == "anomaly_detection":
-            self.flatten_head = FlattenHeads(
-                individual=self.individual,
-                n_vars=configs.enc_in,
-                patch_num=self.patch_num,
-                nf=self.d_model,
-                targets_window=self.seq_len,
-                head_dropout=self.out_dropout,
-                cls_token=False,
-            )
-        else:
-            raise ValueError("task name wrong!")
