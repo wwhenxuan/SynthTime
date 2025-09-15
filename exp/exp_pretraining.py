@@ -69,7 +69,7 @@ class Exp_Pretrain(object):
     def _built_model(self) -> nn.Module:
         """构建用于预训练的模型"""
         self.accelerator.print("正在构建预训练的模型...")
-        return model_dict[self.configs.model_name](configs=self.configs)
+        return model_dict[self.configs.model](configs=self.configs)
 
     def _select_optimizer(self, trainable_params: List[torch.Tensor]) -> Optimizer:
         """创建模型的优化器对象"""

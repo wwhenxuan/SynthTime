@@ -17,7 +17,7 @@ from .optimizer_interface import OptimizerInterface
 from .train_model import Trainer
 
 # 创建文件目录的函数
-from .tools import makedir
+from .tools import makedir, set_seed
 
 # 打印训练参数配置的函数
 from .print_args import print_args

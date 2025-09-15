@@ -88,8 +88,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             train_loss = []
 
             self.model.train()
+
             # 每个Epoch所用的时间
             epoch_time = time.time()
+
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(
                 train_loader
             ):
@@ -155,6 +157,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     epoch + 1, train_steps, train_loss, vali_loss, test_loss
                 )
             )
+
             early_stopping(vali_loss, self.model, path)
             if early_stopping.early_stop:
                 print("Early stopping")
