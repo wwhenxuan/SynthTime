@@ -10,7 +10,7 @@ import torch
 from einops import einsum, rearrange, repeat
 from torch import nn
 
-from typing import Optional, Union
+from typing import Optional, List, Union
 
 
 class Transpose(nn.Module):
@@ -253,6 +253,97 @@ class DepthWiseConv(nn.Module):
         # print("Point_wise:", out.shape)
 
         return out
+
+
+def get_talking_heads(
+    d_model: int, n_layers: int
+) -> Union[List[nn.Module], nn.ModuleList[nn.Module]]:
+    """使用卷积层接收来自Transformer层的输出结果"""
+    return nn.ModuleList(
+        [
+            nn.Sequential(
+                Transpose(1, 2),
+                nn.Conv1d(
+                    in_channels=d_model,
+                    out_channels=d_model,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                ),
+                Transpose(1, 2),
+            )
+            for _ in range(n_layers)
+        ]
+    )
+
+
+class Flatten_Heads(nn.Module):
+    """Integrate the final output of the time series encoder"""
+
+    def __init__(
+        self,
+        individual: bool,
+        n_vars: int,
+        nf: int,
+        patch_num: int,
+        targets_window: int,
+        head_dropout: int = 0,
+        cls_token: Optional[bool] = False,
+    ) -> None:
+        super().__init__()
+        # Whether to output in a channel-independent manner
+        self.individual = individual
+        self.n_vars = n_vars
+        self.patch_num = patch_num
+        # Whether to take the [CLS] Token
+        if cls_token:
+            self.patch_num += 1
+
+        if self.individual:
+            self.linears = nn.ModuleList()
+            self.dropouts = nn.ModuleList()
+            self.flattens = nn.ModuleList()
+            for i in range(self.n_vars):
+                self.linears.append(nn.Linear(nf * self.patch_num, targets_window))
+                self.dropouts.append(nn.Dropout(head_dropout))
+                self.flattens.append(nn.Flatten(start_dim=-2))
+        else:
+            self.linear = nn.Linear(nf * self.patch_num, targets_window)
+            self.dropout = nn.Dropout(head_dropout)
+            self.flatten = nn.Flatten(start_dim=-2)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # [batch_size, n_vars, d_model, patch_num]
+        if self.individual is True:
+            x_out = []
+            for i in range(self.n_vars):
+                # 将某一通道的维数展平
+                z = self.flattens[i](x[:, i, :, :])
+                z = self.linears[i](z)
+                z = self.dropouts[i](z)
+                x_out.append(z)
+            x = torch.stack(x_out, dim=1)
+        else:
+            x = self.flatten(x)
+            x = self.linear(x)
+            x = self.dropout(x)
+        return x
+
+
+class TaskHeads(nn.Module):
+    def __init__(self, task_name: str, individual: bool,
+        n_vars: int,
+        nf: int,
+                 n_classes: int,
+        patch_num: int,
+        targets_window: int,
+        head_dropout: int = 0,
+        cls_token: Optional[bool] = False,
+                 ) -> None:
+        super(TaskHeads, self).__init__()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pass
+
 
 
 # if __name__ == '__main__':

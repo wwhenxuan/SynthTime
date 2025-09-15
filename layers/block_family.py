@@ -44,7 +44,6 @@ class BinaryAttentionBias(AttentionBias):
 
 
 class TemporalAttention(nn.Module):
-    """Moriai架构的注意力机制"""
 
     def __init__(
         self,
@@ -53,29 +52,26 @@ class TemporalAttention(nn.Module):
         attention_dropout=0.1,
         output_attention=False,
         d_model=512,
-        num_heads=8,
-        max_len=100,
-        covariate=False,
-        flash_attention=False,
+        n_heads: int=8,
+        max_len=100,  # 最大长度又影响什么
+        covariate=False,  # 这个变量的具体作用是什么
+        flash_attention=False,  # 什么是Flash Attention
     ):
         super(TemporalAttention, self).__init__()
-        # 使注意力稳定的尺度因子
         self.scale = scale
         self.mask_flag = mask_flag
-        # 是否输出注意力机制
         self.output_attention = output_attention
         self.dropout = nn.Dropout(attention_dropout)
         self.covariate = covariate
         self.flash_attention = flash_attention
-        # 计算queries和keys进行点积的注意力分数矩阵
         self.qk_proj = QueryKeyProjection(
             dim=d_model,
-            num_heads=num_heads,
+            num_heads=n_heads,
             proj_layer=RotaryProjection,
             kwargs=dict(max_len=max_len),
             partial_factor=(0.0, 0.5),
         )
-        self.attn_bias = BinaryAttentionBias(dim=d_model, num_heads=num_heads)
+        self.attn_bias = BinaryAttentionBias(dim=d_model, num_heads=n_heads)
 
     def forward(
         self, queries, keys, values, attn_mask, n_vars, n_tokens, tau=None, delta=None
@@ -89,8 +85,7 @@ class TemporalAttention(nn.Module):
         if self.flash_attention:
             values = values.permute(0, 2, 1, 3)
 
-        # 由于添加了[CLS]这个特殊的Token因此这里需要+1
-        seq_id = torch.arange(n_tokens * n_vars + 1)
+        seq_id = torch.arange(n_tokens * n_vars)
         seq_id = repeat(seq_id, "n -> b h n", b=B, h=H)
 
         queries, keys = self.qk_proj(queries, keys, query_id=seq_id, kv_id=seq_id)
@@ -99,17 +94,12 @@ class TemporalAttention(nn.Module):
 
         var_id = repeat(torch.arange(n_vars), "C -> (C n_tokens)", n_tokens=n_tokens)
         var_id = repeat(var_id, "L -> b h L", b=B, h=1).to(queries.device)
-        # 由于添加了[CLS]这个特殊的token，因此变量这里也要额外添加一个
-        var_id = torch.concat(
-            [torch.ones(size=(B, 1, 1)).to(queries.device) * n_vars, var_id], dim=2
-        )
 
-        # var_id里面存放的是变量的编号，如果有输入通道是10，那么就表示有10个变量，然后对应的
         attn_bias = self.attn_bias(var_id, var_id)
 
+        # TODO: 是否要将被掩码部分的token数值设置为0
         if self.mask_flag:
             if attn_mask is None:
-                # 没有时序掩码的时候
                 if self.covariate:
                     attn_mask = TimerCovariateMask(
                         B, n_vars, n_tokens, device=queries.device
@@ -120,7 +110,6 @@ class TemporalAttention(nn.Module):
                     )
             attn_mask = attn_bias.masked_fill(attn_mask.mask, float("-inf"))
         else:
-            # 没有添加注意力掩码因此运行这一行代码
             attn_mask = attn_bias
 
         if self.flash_attention:
@@ -129,7 +118,6 @@ class TemporalAttention(nn.Module):
             )
         else:
             scores = torch.einsum("bhle,bhse->bhls", queries, keys)
-            # 跳过[CLS]这个特殊的token
             scores += attn_mask
 
             A = self.dropout(torch.softmax(scale * scores, dim=-1))
@@ -199,13 +187,15 @@ class AttentionLayer(nn.Module):
 class FrequencyFilter(nn.Module):
     """频域滤波模块"""
 
-    def __init__(self, adaptive_filter: bool, dim: int) -> None:
+    def __init__(
+        self, adaptive_filter: bool, d_model: int, norm: Optional[str] = "ortho"
+    ) -> None:
         super().__init__()
         self.complex_weight_high = nn.Parameter(
-            torch.randn(dim, 2, dtype=torch.float32) * 0.02
+            torch.randn(d_model, 2, dtype=torch.float32) * 0.02
         )
         self.complex_weight = nn.Parameter(
-            torch.randn(dim, 2, dtype=torch.float32) * 0.02
+            torch.randn(d_model, 2, dtype=torch.float32) * 0.02
         )
 
         # 使用截断正态分布

@@ -8,6 +8,7 @@ Created on 2025/09/12 10:36:58
 from .projection import QueryKeyProjection, RotaryProjection
 from .projection import (
     get_activation,
+    get_talking_heads,
     Normalization,
     TimeFreqConcatenate,
     DepthWiseConv,
