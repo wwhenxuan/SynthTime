@@ -5,6 +5,7 @@ Created on 2024/9/23 15:56
 @email: wwhenxuan@gmail.com
 用于模型训练的代码
 """
+import time
 import os
 from os import path
 import sys
@@ -19,7 +20,7 @@ from torch import Tensor
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
-from torch_geometric.loader import DataLoader
+from torch.utils.data import DataLoader
 
 import openpyxl as xl
 from openpyxl import load_workbook
@@ -37,6 +38,166 @@ from utils.model_interface import ModelInterface
 from utils.optimizer_interface import OptimizerInterface
 from utils.data_interface import DataInterface
 from utils.loss_fn import get_criterion
+
+from model import model_dict
+
+from typing import Optional, List
+
+
+class Exp_Pretrain(object):
+    """用于模型预训练的接口模块"""
+
+    def __init__(
+        self,
+        configs,
+        accelerator: Optional[Accelerator] = None,
+        checkpoints_sleep: Optional[int] = 5,
+    ) -> None:
+        self.configs = configs
+
+        # 通过时间戳信息来作为本次预训练过程的标识
+        self.index = str(time.time()).split(".")[0]
+
+        # 这里创建accelerator对象并且需要传入对应的参数
+        self.accelerator = accelerator if accelerator is not None else Accelerator()
+
+        # 记录当前的进程号
+        self.process_index = self.accelerator.process_index
+
+        # 初始化本次预训练信息登记和参数保存的地址
+        self.checkpoints_path, self.logging_path, self.data_path = self._init_path()
+        self.checkpoints_sleep = checkpoints_sleep
+
+        # 在这里构建所需要的模型
+        self.model = self._built_model()
+
+        # 构建用于训练的数据
+        self.data_length = (
+            configs.data_length if configs.data_length is not None else None
+        )
+        # 每次加载数据文件的个数
+        self.per_number = configs.per_number
+        # 所有数据文件的数目
+        self.all_number = len(os.listdir(path=self.data_path))
+        self.data_loader = self._load_data()
+
+        # 创建用于优化的通用接口
+        self.optim = OptimizerInterface(args=configs, accelerator=self.accelerator)
+
+        # 获取使用的优化器对象
+        self.optimizer = self._load_optimizer(
+            trainable_params=self._get_trainable_params()
+        )
+
+        # 获取当前训练设备
+        self.device = self.accelerator.device
+
+    def _init_path(self) -> Tuple[str, str, str]:
+        """构建记录本次预训练信息的存放地址"""
+        # 用于存放预训练参数的地址
+        self.accelerator.print(
+            "Create the Checkpoints Dirs for Model Pretraining", end=" -> "
+        )
+        checkpoints_path = path.join(self.configs.checkpoints, "exp_" + self.index)
+        if not path.exists(checkpoints_path):
+            os.makedirs(checkpoints_path)
+        self.accelerator.print(Fore.GREEN + "Done!" + Style.RESET_ALL)
+
+        # 用于存放训练结果与信息的地址
+        self.accelerator.print(
+            "Create the Logging Dirs for Model Pretraining", end=" -> "
+        )
+        logging_path = path.join(self.configs.results, "exp_" + self.index)
+        if not path.exists(logging_path):
+            os.makedirs(logging_path)
+        self.accelerator.print(Fore.GREEN + "Done!" + Style.RESET_ALL)
+
+        # 获取存放数据集的地址
+        data_path = self.configs.root_path
+
+        return checkpoints_path, logging_path, data_path
+
+    def _built_model(self) -> nn.Module:
+        """构建用于预训练的模型"""
+        self.accelerator.print("正在构建预训练的模型...")
+        return model_dict[self.configs.model](configs=self.configs)
+
+    def _load_optimizer(self, trainable_params: List[torch.Tensor]) -> Optimizer:
+        """创建模型的优化器对象"""
+        return self.optim.load_optimizer(parameters=trainable_params)
+
+    def _load_scheduler(self) -> LRScheduler:
+        """创建模型的动态学习率调整模块"""
+
+    def _load_criterion(self) -> nn.Module:
+        """获取用于模型训练的损失函数"""
+
+    def _load_data(self) -> DataLoader:
+        """在这里需要搭建一个可以不断创建预训练数据的迭代器"""
+        # 统计数据集中样本的数目
+        if self.data_length is None:
+            data_length = 0
+
+            # TODO: 这部分内容应该不被调用
+            self.accelerator.print("开始读取每一个数据文件并统计数目:")
+            sleep(1)
+            for file_name in tqdm(os.listdir(self.data_path)):
+                if file_name.endswith(".pt"):
+                    file_path = path.join(self.data_path, file_name)
+                    # 加载具体的数据文件
+                    data = torch.load(file_path)
+                    # 记录具体的样本文件
+                    data_length += data.shape[0]
+
+            self.data_length = data_length
+
+    def _get_trainable_params(self) -> List[torch.Tensor]:
+        """获取能够进行训练的参数"""
+        train_params = []
+        for params in self.model.parameters():
+            if params.requires_grad is True:
+                # 不计算梯度的参数为冻结参数
+                train_params.append(params)
+        return train_params
+
+    def prepare(self) -> None:
+        """对训练所需要的各种对象进行封装"""
+
+    def prepare_data_loader(self, data_loader: DataLoader) -> DataLoader:
+        """对训练所需要的数据进行封装"""
+        return self.accelerator.prepare_data_loader(data_loader=data_loader)
+
+    def logging(self) -> None:
+        """创建并等级本次预训练过程中所产生的信息"""
+        # TODO: 可以只记录一个过程的内容
+        # TODO: 多卡并行中不同卡上的损失好像是不一样的
+
+    def save_checkpoint(self, epoch: int) -> None:
+        """保存当前模型预训练的参数"""
+        if self.process_index == 0:
+            # 在主进程中保存模型参数
+            self.accelerator.print(
+                Fore.RED
+                + "Now is saving the pre-trained model parameters"
+                + Style.RESET_ALL,
+                end=" -> ",
+            )
+            save_name = f"{epoch}.pth"
+            torch.save(self.model.state_dict(), path.join(self.params_path, save_name))
+            self.accelerator.print(Fore.GREEN + "successfully saved!" + Style.RESET_ALL)
+        sleep(self.checkpoints_sleep)
+
+    def pretrain_one_epoch(
+        self,
+        epoch: int,
+    ):
+        """"""
+        loss, time_loss, freq_loss = torch.zeros()
+
+        self.model.train()
+
+    def fit(self) -> None:
+        """开始进行模型的预训练"""
 
 
 class Trainer(object):

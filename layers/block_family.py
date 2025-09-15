@@ -26,7 +26,8 @@ class AttentionBias(nn.Module, abc.ABC):
         self.head_dim = dim // num_heads
 
     @abc.abstractmethod
-    def forward(self, query_id, kv_id): ...
+    def forward(self, query_id, kv_id):
+        ...
 
 
 class BinaryAttentionBias(AttentionBias):
