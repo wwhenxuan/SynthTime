@@ -19,61 +19,6 @@ from layers import (
 from typing import Optional, Union, Tuple, List, Any
 
 
-class TransformerEncoder(nn.Module):
-    """一整个注意力机制模块"""
-
-    def __init__(
-        self,
-        transformer_layer: Union[nn.Module, List[nn.Module]],
-        d_model: int,  # 模型的维度
-        n_layers: int,
-        backbone_norm: Optional[str] = None,
-        talking_heads: Optional[bool] = False,
-    ) -> None:
-        super(TransformerEncoder, self).__init__()
-        """存放注意力机制的层，这里还有一个卷积模块"""
-        self.transformer_layers = nn.ModuleList(transformer_layer)
-
-        # TODO: 注意这个卷积层是用来做什么的？  先保留吧
-        self.talking_heads = (
-            get_talking_heads(d_model=d_model, n_layers=n_layers)
-            if talking_heads
-            else None
-        )
-
-        # 使用的标准化层，BatchNorm或是LayerNorm
-        self.norm = (
-            Normalization(num_features=d_model, norm=backbone_norm)
-            if backbone_norm is not None
-            else None
-        )
-
-    def forward(self, x, n_vars, n_tokens, attn_mask=None, tau=None, delta=None):
-        # x [B, L, D]
-        if self.talking_heads is not None:
-            for i, (transformer_layer, talking_layer) in enumerate(
-                zip(self.transformer_layers, self.conv_layers)
-            ):
-                delta = delta if i == 0 else None
-                x = transformer_layer(
-                    x, n_vars, n_tokens, attn_mask=attn_mask, tau=tau, delta=delta
-                )
-                x = talking_layer(x)
-
-            # TODO: 为什么要进行这一步
-            # x = self.transformer_layers[-1](x, n_vars, n_tokens, tau=tau, delta=None)
-        else:
-            for transformer_layer in self.transformer_layers:
-                x = transformer_layer(
-                    x, n_vars, n_tokens, attn_mask=attn_mask, tau=tau, delta=delta
-                )
-
-        if self.norm is not None:
-            x = self.norm(x)
-
-        return x
-
-
 class TransformerLayer(nn.Module):
     """Moriai使用的一层注意力机制"""
 
@@ -196,3 +141,58 @@ class TransformerLayer(nn.Module):
 
             # 返回本次传播特征
             return self.norm2(outputs)
+
+
+class TransformerEncoder(nn.Module):
+    """一整个注意力机制模块"""
+
+    def __init__(
+        self,
+        transformer_layer: Union[nn.Module, List[Union[nn.Module, TransformerLayer]]],
+        d_model: int,  # 模型的维度
+        n_layers: int,
+        backbone_norm: Optional[str] = None,
+        talking_heads: Optional[bool] = False,
+    ) -> None:
+        super(TransformerEncoder, self).__init__()
+        """存放注意力机制的层，这里还有一个卷积模块"""
+        self.transformer_layers = nn.ModuleList(transformer_layer)
+
+        # TODO: 注意这个卷积层是用来做什么的？  先保留吧
+        self.talking_heads = (
+            get_talking_heads(d_model=d_model, n_layers=n_layers)
+            if talking_heads
+            else None
+        )
+
+        # 使用的标准化层，BatchNorm或是LayerNorm
+        self.norm = (
+            Normalization(num_features=d_model, norm=backbone_norm)
+            if backbone_norm is not None
+            else None
+        )
+
+    def forward(self, x, n_vars, n_tokens, attn_mask=None, tau=None, delta=None):
+        # x [B, L, D]
+        if self.talking_heads is not None:
+            for i, (transformer_layer, talking_layer) in enumerate(
+                zip(self.transformer_layers, self.conv_layers)
+            ):
+                delta = delta if i == 0 else None
+                x = transformer_layer(
+                    x, n_vars, n_tokens, attn_mask=attn_mask, tau=tau, delta=delta
+                )
+                x = talking_layer(x)
+
+            # TODO: 为什么要进行这一步
+            # x = self.transformer_layers[-1](x, n_vars, n_tokens, tau=tau, delta=None)
+        else:
+            for transformer_layer in self.transformer_layers:
+                x = transformer_layer(
+                    x, n_vars, n_tokens, attn_mask=attn_mask, tau=tau, delta=delta
+                )
+
+        if self.norm is not None:
+            x = self.norm(x)
+
+        return x
